@@ -13,7 +13,10 @@ export default function App() {
   const APPLAUSE_URL = "/applouse/vvqne-applause-383901.mp3";
   const musicUrl = (file) => `/sounds/${file}`;
 
-  // ---------- Loading State (NEW) ----------
+  // ---------- UI Visibility State (NEW) ----------
+  const [panelOpen, setPanelOpen] = useState(true);
+
+  // ---------- Loading State ----------
   const [isLoading, setIsLoading] = useState(true);
   const [loadProgress, setLoadProgress] = useState(0);
 
@@ -25,7 +28,7 @@ export default function App() {
   // ---------- Animation UI state ----------
   const [clipNames, setClipNames] = useState([]);
   const [selectedClip, setSelectedClip] = useState("");
-  const selectedClipRef = useRef(""); 
+  const selectedClipRef = useRef("");
   const [animStatus, setAnimStatus] = useState("Initializing...");
 
   // ---------- Applause UI state ----------
@@ -58,7 +61,7 @@ export default function App() {
   // ---------- Three object refs ----------
   const stageRef = useRef(null);
   const playerRef = useRef(null);
-  const controlsRef = useRef(null); 
+  const controlsRef = useRef(null);
   const cameraRef = useRef(null);
 
   // ---------- Animation engine refs ----------
@@ -73,6 +76,16 @@ export default function App() {
   const audioBRef = useRef(null);
   const activeAudioRef = useRef("A");
   const fadeTimerRef = useRef(null);
+  const pendingMusicRef = useRef(null);
+  const audioUnlockedRef = useRef(false);
+
+  // ---------- Responsive Init ----------
+  useEffect(() => {
+    // If screen is narrow (mobile), start collapsed
+    if (window.innerWidth < 768) {
+      setPanelOpen(false);
+    }
+  }, []);
 
   // ---------- Audio System ----------
   const stopFade = () => {
@@ -88,7 +101,7 @@ export default function App() {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     const ctx = new AudioContext();
     const analyser = ctx.createAnalyser();
-    analyser.fftSize = 64; 
+    analyser.fftSize = 64;
     analyser.smoothingTimeConstant = 0.8;
     analyser.connect(ctx.destination);
 
@@ -107,7 +120,7 @@ export default function App() {
     sourceB.connect(analyser);
 
     const app = new Audio(APPLAUSE_URL);
-    app.volume = 1.0; 
+    app.volume = 1.0;
     applauseAudioRef.current = app;
 
     audioCtxRef.current = ctx;
@@ -116,9 +129,48 @@ export default function App() {
     audioBRef.current = b;
   };
 
+  useEffect(() => {
+    const unlock = async () => {
+      initAudioSystem();
+      try {
+        if (audioCtxRef.current && audioCtxRef.current.state === "suspended") {
+          await audioCtxRef.current.resume();
+        }
+        audioUnlockedRef.current = true;
+
+        if (pendingMusicRef.current) {
+          const { file, targetVolume, ms } = pendingMusicRef.current;
+          pendingMusicRef.current = null;
+          crossfadeTo(file, targetVolume, ms);
+        } else {
+          setMusicStatus((s) => (s === "Tap anywhere to enable audio ▶️" ? "Music idle" : s));
+        }
+      } catch (e) {
+        console.warn("Audio unlock failed:", e);
+      }
+    };
+
+    window.addEventListener("pointerdown", unlock, { once: true });
+    window.addEventListener("keydown", unlock, { once: true });
+
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const crossfadeTo = (file, targetVolume = musicVol, ms = 600) => {
     initAudioSystem();
-    if (audioCtxRef.current.state === "suspended") {
+
+    if (!audioUnlockedRef.current) {
+      pendingMusicRef.current = { file, targetVolume, ms };
+      setSelectedMusic(file);
+      setMusicStatus("Tap anywhere to enable audio ▶️");
+      return;
+    }
+
+    if (audioCtxRef.current && audioCtxRef.current.state === "suspended") {
       audioCtxRef.current.resume();
     }
     stopFade();
@@ -161,42 +213,50 @@ export default function App() {
       })
       .catch((e) => {
         console.warn(e);
-        setMusicStatus("Autoplay blocked (interact first)");
+        pendingMusicRef.current = { file, targetVolume, ms };
+        setMusicStatus("Tap anywhere to enable audio ▶️");
       });
   };
 
   const mapAnimationToMusic = (clipName) => {
-    const n = clipName.toLowerCase();
-    if (n.includes("running")) return "nastelbom-action-440170.mp3";
-    if (n.includes("walking") || n.includes("confident_walk")) return "fassounds-lofi-study-calm-peaceful-chill-hop-112191.mp3";
+    const n = (clipName || "")
+      .toLowerCase()
+      .replace(/\s+/g, "_")
+      .replace(/-+/g, "_");
+
+    if (n.includes("running") || n.includes("run")) return "nastelbom-action-440170.mp3";
+    if (n.includes("walking") || n.includes("walk") || n.includes("confident_walk"))
+      return "fassounds-lofi-study-calm-peaceful-chill-hop-112191.mp3";
     if (n.includes("hip_hop")) return "alexgrohl-sad-soul-sad-hip-hop-chasing-a-feeling-185750.mp3";
     if (n.includes("gangnam")) return "9jackjack8-club-vocal-house-343307.mp3";
     if (n.includes("all_night")) return "the__mountain-deep-house-483808.mp3";
     if (n.includes("cardio")) return "looksmusic-120-bpm-__allure__-g-maj_hard-dj-music-mix-2025-435599.mp3";
     if (n.includes("magic") || n.includes("genie")) return "vaitsez-arabic-drill-trap-beat-482050.mp3";
-    if (n.includes("funny") || n.includes("bubble") || n.includes("boom")) return "music-for-videos-cheerful-electro-swing-152580.mp3";
+    if (n.includes("funny") || n.includes("bubble") || n.includes("boom"))
+      return "music-for-videos-cheerful-electro-swing-152580.mp3";
     if (n.includes("pop") || n.includes("denim") || n.includes("crystal") || n.includes("arm_circle"))
       return "nastelbom-fashion-house-321608.mp3";
+
     return selectedMusic || musicNames[0];
   };
 
   const playClip = (name, fade = 0.2) => {
     const mixer = mixerRef.current;
     const actions = actionsRef.current;
-    
+
     if (!mixer || !actions || !actions.has(name)) {
-        console.warn("Cannot play:", name);
-        return;
+      console.warn("Cannot play:", name);
+      return;
     }
 
     const next = actions.get(name);
     if (currentActionRef.current && currentActionRef.current !== next) {
       currentActionRef.current.fadeOut(fade);
     }
-    
+
     next.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(fade).play();
     currentActionRef.current = next;
-    
+
     setSelectedClip(name);
     selectedClipRef.current = name;
 
@@ -209,26 +269,28 @@ export default function App() {
     if (!mixer) return;
     mixer.stopAllAction();
     currentActionRef.current = null;
-    if (audioARef.current) audioARef.current.pause();
-    if (audioBRef.current) audioBRef.current.pause();
-    setMusicStatus("Music paused");
+    setMusicStatus((s) => (s.startsWith("Playing:") ? s : "Music idle"));
   };
 
   const triggerApplause = () => {
     initAudioSystem();
-    if (isApplauding) return; 
+    if (isApplauding) return;
 
     setIsApplauding(true);
-    stopAnim(); 
+    stopAnim();
+
+    if (audioARef.current) audioARef.current.pause();
+    if (audioBRef.current) audioBRef.current.pause();
+    setMusicStatus("Music paused (applause)");
 
     if (applauseAudioRef.current) {
       applauseAudioRef.current.currentTime = 0;
-      applauseAudioRef.current.play().catch(e => console.log("Audio block", e));
+      applauseAudioRef.current.play().catch((e) => console.log("Audio block", e));
     }
 
     const particleInterval = setInterval(() => {
       const id = Date.now() + Math.random();
-      const left = Math.random() * 80 + 10; 
+      const left = Math.random() * 80 + 10;
       setParticles((prev) => [...prev, { id, left }]);
       setTimeout(() => {
         setParticles((prev) => prev.filter((p) => p.id !== id));
@@ -239,9 +301,9 @@ export default function App() {
 
     setTimeout(() => {
       clearInterval(particleInterval);
-      setParticles([]); 
+      setParticles([]);
       setIsApplauding(false);
-      
+
       if (resumeClip) {
         playClip(resumeClip);
       } else if (clipNames.length > 0) {
@@ -254,7 +316,6 @@ export default function App() {
     if (!cameraRef.current || !controlsRef.current) return;
     const cam = cameraRef.current;
     const controls = controlsRef.current;
-    
     cam.position.x += x;
     cam.position.y += y;
     cam.position.z += z;
@@ -270,11 +331,9 @@ export default function App() {
     const target = controlsRef.current.target;
     const direction = new THREE.Vector3().subVectors(cam.position, target);
     const dist = direction.length();
-    
     let newDist = dist + amount;
     if (newDist < 2) newDist = 2;
     if (newDist > 12) newDist = 12;
-
     direction.setLength(newDist);
     cam.position.copy(target).add(direction);
     controlsRef.current.update();
@@ -289,10 +348,9 @@ export default function App() {
     console.log(`[${label}] bbox center:`, center, "size:", size);
   };
 
-  // ---------- LOAD LOGIC (PARALLEL) ----------
+  // ---------- LOAD LOGIC ----------
   useEffect(() => {
     const mount = mountRef.current;
-
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0f1115);
 
@@ -307,9 +365,9 @@ export default function App() {
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
-    controls.minDistance = 2.0; 
-    controls.maxDistance = 12.0; 
-    controls.enablePan = true; 
+    controls.minDistance = 2.0;
+    controls.maxDistance = 12.0;
+    controls.enablePan = true;
     controlsRef.current = controls;
 
     scene.add(new THREE.HemisphereLight(0xffffff, 0x2a2f3a, 1.2));
@@ -320,89 +378,70 @@ export default function App() {
     const grid = new THREE.GridHelper(50, 50, 0x444444, 0x222222);
     scene.add(grid);
 
-    // --- PARALLEL LOADING MANAGER ---
     const manager = new THREE.LoadingManager();
     manager.onProgress = (url, itemsLoaded, itemsTotal) => {
-        const p = (itemsLoaded / itemsTotal) * 100;
-        setLoadProgress(Math.round(p));
+      const p = (itemsLoaded / itemsTotal) * 100;
+      setLoadProgress(Math.round(p));
     };
 
     const loader = new GLTFLoader(manager);
-
-    // Helper to load as promise
-    const loadGltf = (url) => {
-        return new Promise((resolve, reject) => {
-            loader.load(url, resolve, undefined, reject);
-        });
-    };
+    const loadGltf = (url) =>
+      new Promise((resolve, reject) => {
+        loader.load(url, resolve, undefined, reject);
+      });
 
     const loadAllAssets = async () => {
-        try {
-            setAnimStatus("Downloading assets...");
-            // Load all 3 files in parallel! Much faster.
-            const [stageGltf, charGltf, animGltf] = await Promise.all([
-                loadGltf(STAGE_URL),
-                loadGltf(CHAR_URL),
-                loadGltf(ANIM_URL)
-            ]);
+      try {
+        setAnimStatus("Downloading assets...");
+        const [stageGltf, charGltf, animGltf] = await Promise.all([loadGltf(STAGE_URL), loadGltf(CHAR_URL), loadGltf(ANIM_URL)]);
 
-            // 1. Setup Stage
-            const stage = stageGltf.scene;
-            stageRef.current = stage;
-            scene.add(stage);
-            // Apply Initial Transform (used ref values to be safe)
-            stage.position.set(stageT.x, stageT.y, stageT.z);
-            stage.scale.setScalar(stageT.s);
-            stage.rotation.y = stageT.r;
+        const stage = stageGltf.scene;
+        stageRef.current = stage;
+        scene.add(stage);
+        stage.position.set(stageT.x, stageT.y, stageT.z);
+        stage.scale.setScalar(stageT.s);
+        stage.rotation.y = stageT.r;
 
-            // 2. Setup Character
-            const player = charGltf.scene;
-            playerRef.current = player;
-            scene.add(player);
-            player.position.set(charT.x, charT.y, charT.z);
-            player.scale.setScalar(charT.s);
+        const player = charGltf.scene;
+        playerRef.current = player;
+        scene.add(player);
+        player.position.set(charT.x, charT.y, charT.z);
+        player.scale.setScalar(charT.s);
 
-            // 3. Setup Animations
-            const mixer = new THREE.AnimationMixer(player);
-            mixerRef.current = mixer;
+        const mixer = new THREE.AnimationMixer(player);
+        mixerRef.current = mixer;
 
-            // Combine animations from character file (if any) and animation file
-            const baseClips = charGltf.animations || [];
-            const extraClips = animGltf.animations || [];
-            const allClips = [...baseClips, ...extraClips];
+        const baseClips = charGltf.animations || [];
+        const extraClips = animGltf.animations || [];
+        const allClips = [...baseClips, ...extraClips];
 
-            if (allClips.length === 0) {
-                setAnimStatus("No animations found ⚠️");
-            } else {
-                const map = new Map();
-                allClips.forEach((c) => {
-                    if (c.name) map.set(c.name, mixer.clipAction(c));
-                });
-                actionsRef.current = map;
-                
-                const names = Array.from(map.keys());
-                setClipNames(names);
-                setAnimStatus(""); // Clear loading text
+        if (allClips.length === 0) {
+          setAnimStatus("No animations found ⚠️");
+        } else {
+          const map = new Map();
+          allClips.forEach((c) => {
+            if (c.name) map.set(c.name, mixer.clipAction(c));
+          });
+          actionsRef.current = map;
 
-                // Auto-Play
-                const preferred =
-                  names.find((x) => x.toLowerCase().includes("walking")) ||
-                  names.find((x) => x.toLowerCase().includes("all_night")) ||
-                  names[0];
-                
-                if (preferred) {
-                    // Slight delay to ensure React state updates don't block render
-                    setTimeout(() => playClip(preferred, 0), 100);
-                }
-            }
+          const names = Array.from(map.keys());
+          setClipNames(names);
+          setAnimStatus("");
 
-            setIsLoading(false); // Hide loading screen
-            controls.target.set(0, 1, 0);
+          const preferred =
+            names.find((x) => x.toLowerCase().includes("walking")) ||
+            names.find((x) => x.toLowerCase().includes("all_night")) ||
+            names[0];
 
-        } catch (err) {
-            console.error("Load Error:", err);
-            setAnimStatus("Error loading assets. Check console.");
+          if (preferred) setTimeout(() => playClip(preferred, 0), 100);
         }
+
+        setIsLoading(false);
+        controls.target.set(0, 1, 0);
+      } catch (err) {
+        console.error("Load Error:", err);
+        setAnimStatus("Error loading assets. Check console.");
+      }
     };
 
     loadAllAssets();
@@ -416,17 +455,11 @@ export default function App() {
 
     const clock = new THREE.Clock();
     let raf = 0;
-    
     const tick = () => {
       raf = requestAnimationFrame(tick);
       const delta = clock.getDelta();
-      // Cap delta for stability
       const safeDelta = Math.min(delta, 0.1);
-
-      if (mixerRef.current) {
-          mixerRef.current.update(safeDelta);
-      }
-      
+      if (mixerRef.current) mixerRef.current.update(safeDelta);
       if (controlsRef.current) controlsRef.current.update();
       renderer.render(scene, camera);
     };
@@ -441,9 +474,8 @@ export default function App() {
         mount.removeChild(renderer.domElement);
       }
     };
-  }, []); // Run once
+  }, []);
 
-  // Live Transforms
   useEffect(() => {
     if (stageRef.current) {
       stageRef.current.position.set(stageT.x, stageT.y, stageT.z);
@@ -457,8 +489,6 @@ export default function App() {
       playerRef.current.scale.setScalar(charT.s);
     }
   }, [charT]);
-
-  // Volume
   useEffect(() => {
     initAudioSystem();
     const cur = activeAudioRef.current === "A" ? audioARef.current : audioBRef.current;
@@ -488,180 +518,237 @@ export default function App() {
 
   return (
     <div style={{ width: "100vw", height: "100vh", overflow: "hidden", position: "relative" }}>
-      
-      {/* --- LOADING SCREEN (NEW) --- */}
       {isLoading && (
-        <div style={{
-          position: "absolute", zIndex: 9999, top: 0, left: 0, width: "100%", height: "100%",
-          background: "#0f1115", display: "flex", flexDirection: "column",
-          alignItems: "center", justifyContent: "center", color: "#fff"
-        }}>
-           <div style={{ fontSize: 24, fontWeight: "bold", marginBottom: 20 }}>
-             Loading Assets...
-           </div>
-           <div style={{ width: 300, height: 6, background: "#333", borderRadius: 3, overflow: "hidden" }}>
-              <div style={{ width: `${loadProgress}%`, height: "100%", background: "#00c6ff", transition: "width 0.2s" }} />
-           </div>
-           <div style={{ marginTop: 10, fontSize: 14, opacity: 0.7 }}>{loadProgress}%</div>
+        <div
+          style={{
+            position: "absolute",
+            zIndex: 9999,
+            top: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+            background: "#0f1115",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "#fff",
+          }}
+        >
+          <div style={{ fontSize: 24, fontWeight: "bold", marginBottom: 20 }}>Loading Assets...</div>
+          <div style={{ width: 300, height: 6, background: "#333", borderRadius: 3, overflow: "hidden" }}>
+            <div
+              style={{
+                width: `${loadProgress}%`,
+                height: "100%",
+                background: "#00c6ff",
+                transition: "width 0.2s",
+              }}
+            />
+          </div>
+          <div style={{ marginTop: 10, fontSize: 14, opacity: 0.7 }}>{loadProgress}%</div>
         </div>
       )}
 
-      {/* FLOATING ICONS OVERLAY */}
-      <div style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 5, overflow: "hidden" }}>
-        {particles.map(p => (
-           <div key={p.id} style={{
-             position: "absolute",
-             left: `${p.left}%`,
-             bottom: "-50px",
-             fontSize: "4rem",
-             animation: "floatUp 1.5s ease-out forwards",
-             opacity: 0
-           }}>
-             👏
-           </div>
-        ))}
-        {isApplauding && (
-           <div style={{
-             position: "absolute",
-             bottom: "20%",
-             left: "50%",
-             transform: "translateX(-50%)",
-             background: "rgba(0,0,0,0.6)",
-             padding: "8px 16px",
-             borderRadius: 20,
-             color: "#FFD700",
-             fontWeight: "bold",
-             fontSize: "14px",
-             boxShadow: "0 0 10px rgba(0,0,0,0.5)",
-             animation: "fadeIn 0.5s ease"
-           }}>
-             Shahin Applause active...
-           </div>
-        )}
-      </div>
-
-      <div style={hud}>
-        <div style={titleStyle}>Niguli on the stage</div>
-
-        <div style={sectionTitle}>Animations</div>
-        {!isLoading && animStatus && <div style={smallText}>{animStatus}</div>}
-
-        <div style={{ display: "flex", gap: 8, margin: "10px 0" }}>
-          <button style={btn} onClick={() => selectedClip && playClip(selectedClip)} disabled={isApplauding}>
-            Play
-          </button>
-          <button style={btn} onClick={stopAnim} disabled={isApplauding}>
-            Stop
-          </button>
-          <button style={btn} onClick={prevClip} disabled={isApplauding}>
-            ◀
-          </button>
-          <button style={btn} onClick={nextClip} disabled={isApplauding}>
-            ▶
-          </button>
-        </div>
-
-        <select
-          style={selectStyle}
-          value={selectedClip}
-          onChange={(e) => playClip(e.target.value)}
-          disabled={!clipNames.length || isApplauding}
-        >
-          {!clipNames.length ? (
-            <option>Loading...</option>
-          ) : (
-            clipNames.map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))
-          )}
-        </select>
-        
-        <button style={applauseBtnStyle} onClick={triggerApplause} disabled={isApplauding}>
-          {isApplauding ? "Applauding..." : "👏 Shahin Applause"}
-        </button>
-
-        <div style={{ height: 14 }} />
-
-        <div style={sectionTitle}>Music</div>
-        <div style={smallText}>{musicStatus}</div>
-
-        <select style={selectStyle} value={selectedMusic} onChange={(e) => crossfadeTo(e.target.value)}>
-          {musicNames.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-        </select>
-
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 10, marginTop: 12 }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 12, opacity: 0.9, marginBottom: 4 }}>
-              Volume: <b>{Math.round(musicVol * 100)}%</b>
-            </div>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={musicVol}
-              onChange={(e) => setMusicVol(Number(e.target.value))}
-              style={{ width: "100%", accentColor: "#00e5ff" }}
-            />
-          </div>
-          <Visualizer analyserRef={analyserRef} />
-        </div>
-
-        <div style={{ height: 20 }} />
-
-        <button
-          style={{ ...btn, width: "100%", background: "rgba(255,255,255,0.12)" }}
-          onClick={() => setShowTransforms(!showTransforms)}
-        >
-          {showTransforms ? "Hide Transform Settings ▲" : "Show Transform Settings ▼"}
-        </button>
-
-        {showTransforms && (
+      {/* Floating Particles */}
+      <div
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          width: "100%",
+          height: "100%",
+          pointerEvents: "none",
+          zIndex: 5,
+          overflow: "hidden",
+        }}
+      >
+        {particles.map((p) => (
           <div
+            key={p.id}
             style={{
-              marginTop: 10,
-              padding: 10,
-              background: "rgba(0,0,0,0.3)",
-              borderRadius: 10,
-              border: "1px solid rgba(255,255,255,0.1)",
+              position: "absolute",
+              left: `${p.left}%`,
+              bottom: "-50px",
+              fontSize: "4rem",
+              animation: "floatUp 1.5s ease-out forwards",
+              opacity: 0,
             }}
           >
-            <div style={sectionTitle}>Transforms</div>
-            <div style={{ fontWeight: 800, marginTop: 8 }}>Stage Transform</div>
-            <TransformEditor value={stageT} onChange={setStageT} step={0.1} scaleStep={0.01} hasRotation={true} />
-            <div style={{ fontWeight: 800, marginTop: 12 }}>Character Transform</div>
-            <TransformEditor value={charT} onChange={setCharT} step={0.1} scaleStep={0.01} />
-            <button style={{ ...btn, width: "100%", marginTop: 10 }} onClick={printDefaults}>
-              Print defaults to console
-            </button>
+            👏
+          </div>
+        ))}
+        {isApplauding && (
+          <div
+            style={{
+              position: "absolute",
+              bottom: "20%",
+              left: "50%",
+              transform: "translateX(-50%)",
+              background: "rgba(0,0,0,0.6)",
+              padding: "8px 16px",
+              borderRadius: 20,
+              color: "#FFD700",
+              fontWeight: "bold",
+              fontSize: "14px",
+              boxShadow: "0 0 10px rgba(0,0,0,0.5)",
+              animation: "fadeIn 0.5s ease",
+            }}
+          >
+            Shahin Applause active...
           </div>
         )}
       </div>
 
-      {/* --- BOTTOM RIGHT CAMERA CONTROLS --- */}
+      {/* --- COLLAPSED TOGGLE BUTTON --- */}
+      {!panelOpen && !isLoading && (
+        <button
+          onClick={() => setPanelOpen(true)}
+          style={{
+            position: "fixed",
+            top: 15,
+            left: 15,
+            zIndex: 11,
+            padding: "10px 16px",
+            background: "rgba(20, 20, 25, 0.75)",
+            backdropFilter: "blur(12px)",
+            color: "white",
+            border: "1px solid rgba(255,255,255,0.2)",
+            borderRadius: 30,
+            cursor: "pointer",
+            fontWeight: "bold",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            boxShadow: "0 4px 15px rgba(0,0,0,0.3)",
+          }}
+        >
+          <span>⚙️</span> Controls
+        </button>
+      )}
+
+      {/* --- MAIN PANEL --- */}
+      {panelOpen && (
+        <div style={hud}>
+          {/* Header with Title and Close Button */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+            <div style={titleStyle}>Niguli on the stage</div>
+            <button
+              onClick={() => setPanelOpen(false)}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "rgba(255,255,255,0.5)",
+                fontSize: "20px",
+                cursor: "pointer",
+                padding: "0 0 0 10px",
+                lineHeight: 1,
+              }}
+            >
+              ✕
+            </button>
+          </div>
+
+          <div style={sectionTitle}>Animations</div>
+          {!isLoading && animStatus && <div style={smallText}>{animStatus}</div>}
+
+          <div style={{ display: "flex", gap: 8, margin: "10px 0" }}>
+            <button style={btn} onClick={() => selectedClip && playClip(selectedClip)} disabled={isApplauding}>
+              Play
+            </button>
+            <button style={btn} onClick={stopAnim} disabled={isApplauding}>
+              Stop
+            </button>
+            <button style={btn} onClick={prevClip} disabled={isApplauding}>
+              ◀
+            </button>
+            <button style={btn} onClick={nextClip} disabled={isApplauding}>
+              ▶
+            </button>
+          </div>
+
+          <select style={selectStyle} value={selectedClip} onChange={(e) => playClip(e.target.value)} disabled={!clipNames.length || isApplauding}>
+            {!clipNames.length ? <option>Loading...</option> : clipNames.map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+
+          <button style={applauseBtnStyle} onClick={triggerApplause} disabled={isApplauding}>
+            {isApplauding ? "Applauding..." : "👏 Shahin Applause"}
+          </button>
+
+          <div style={{ height: 14 }} />
+
+          <div style={sectionTitle}>Music</div>
+          <div style={smallText}>{musicStatus}</div>
+
+          <select style={selectStyle} value={selectedMusic} onChange={(e) => crossfadeTo(e.target.value)}>
+            {musicNames.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 10, marginTop: 12 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 12, opacity: 0.9, marginBottom: 4 }}>
+                Volume: <b>{Math.round(musicVol * 100)}%</b>
+              </div>
+              <input type="range" min="0" max="1" step="0.01" value={musicVol} onChange={(e) => setMusicVol(Number(e.target.value))} style={{ width: "100%", accentColor: "#00e5ff" }} />
+            </div>
+            <Visualizer analyserRef={analyserRef} />
+          </div>
+
+          <div style={{ height: 20 }} />
+
+          <button style={{ ...btn, width: "100%", background: "rgba(255,255,255,0.12)" }} onClick={() => setShowTransforms(!showTransforms)}>
+            {showTransforms ? "Hide Transform Settings ▲" : "Show Transform Settings ▼"}
+          </button>
+
+          {showTransforms && (
+            <div style={{ marginTop: 10, padding: 10, background: "rgba(0,0,0,0.3)", borderRadius: 10, border: "1px solid rgba(255,255,255,0.1)" }}>
+              <div style={sectionTitle}>Transforms</div>
+              <div style={{ fontWeight: 800, marginTop: 8 }}>Stage Transform</div>
+              <TransformEditor value={stageT} onChange={setStageT} step={0.1} scaleStep={0.01} hasRotation={true} />
+              <div style={{ fontWeight: 800, marginTop: 12 }}>Character Transform</div>
+              <TransformEditor value={charT} onChange={setCharT} step={0.1} scaleStep={0.01} />
+              <button style={{ ...btn, width: "100%", marginTop: 10 }} onClick={printDefaults}>
+                Print defaults to console
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* --- CAMERA CONTROLS (Bottom Right) --- */}
       <div style={controlsContainerStyle}>
-        <div style={{ fontSize: 10, color: '#aaa', marginBottom: 6, fontWeight: 700 }}>ZOOM</div>
-        <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
-          <button style={ctrlBtn} onClick={() => zoomCamera(-1.5)} title="Zoom In">+</button>
-          <button style={ctrlBtn} onClick={() => zoomCamera(1.5)} title="Zoom Out">-</button>
+        <div style={{ fontSize: 10, color: "#aaa", marginBottom: 6, fontWeight: 700 }}>ZOOM</div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+          <button style={ctrlBtn} onClick={() => zoomCamera(-1.5)} title="Zoom In">
+            +
+          </button>
+          <button style={ctrlBtn} onClick={() => zoomCamera(1.5)} title="Zoom Out">
+            -
+          </button>
         </div>
 
-        <div style={{ fontSize: 10, color: '#aaa', marginBottom: 6, fontWeight: 700 }}>MOVE</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 30px)', gap: 4 }}>
+        <div style={{ fontSize: 10, color: "#aaa", marginBottom: 6, fontWeight: 700 }}>MOVE</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 30px)", gap: 4 }}>
           <div />
-          <button style={ctrlBtnSmall} onClick={() => moveCamera(0, 0.5, 0)}>▲</button>
+          <button style={ctrlBtnSmall} onClick={() => moveCamera(0, 0.5, 0)}>
+            ▲
+          </button>
           <div />
-          <button style={ctrlBtnSmall} onClick={() => moveCamera(-0.5, 0, 0)}>◀</button>
+          <button style={ctrlBtnSmall} onClick={() => moveCamera(-0.5, 0, 0)}>
+            ◀
+          </button>
           <div />
-          <button style={ctrlBtnSmall} onClick={() => moveCamera(0.5, 0, 0)}>▶</button>
+          <button style={ctrlBtnSmall} onClick={() => moveCamera(0.5, 0, 0)}>
+            ▶
+          </button>
           <div />
-          <button style={ctrlBtnSmall} onClick={() => moveCamera(0, -0.5, 0)}>▼</button>
+          <button style={ctrlBtnSmall} onClick={() => moveCamera(0, -0.5, 0)}>
+            ▼
+          </button>
           <div />
         </div>
       </div>
@@ -691,7 +778,7 @@ function Visualizer({ analyserRef }) {
     let animationId;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
-    const bufferLength = 32; 
+    const bufferLength = 32;
     const dataArray = new Uint8Array(bufferLength);
 
     const draw = () => {
@@ -707,16 +794,15 @@ function Visualizer({ analyserRef }) {
       analyserRef.current.getByteFrequencyData(dataArray);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      const barWidth = (canvas.width / bufferLength) * 0.8; 
-      let barHeight;
+      const barWidth = (canvas.width / bufferLength) * 0.8;
       let x = 0;
 
       for (let i = 0; i < bufferLength; i++) {
-        barHeight = (dataArray[i] / 255) * canvas.height;
-        const hue = i * 5 + 180; 
+        const barHeight = (dataArray[i] / 255) * canvas.height;
+        const hue = i * 5 + 180;
         ctx.fillStyle = `hsl(${hue}, 100%, 50%)`;
         ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
-        x += (canvas.width / bufferLength);
+        x += canvas.width / bufferLength;
       }
     };
 
@@ -725,18 +811,7 @@ function Visualizer({ analyserRef }) {
   }, [analyserRef]);
 
   return (
-    <div
-      style={{
-        width: 100,
-        height: 40,
-        background: "rgba(0,0,0,0.3)",
-        borderRadius: 8,
-        border: "1px solid rgba(255,255,255,0.1)",
-        overflow: "hidden",
-        display: "flex",
-        alignItems: "flex-end",
-      }}
-    >
+    <div style={{ width: 100, height: 40, background: "rgba(0,0,0,0.3)", borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", overflow: "hidden", display: "flex", alignItems: "flex-end" }}>
       <canvas ref={canvasRef} width={100} height={40} />
     </div>
   );
@@ -781,27 +856,32 @@ function Num({ label, v, step, onChange }) {
   );
 }
 
-// ---------- Styles ----------
+// ---------- Updated Responsive Styles ----------
 const hud = {
   position: "fixed",
   top: 14,
   left: 14,
-  width: 420,
-  maxHeight: "90vh",
+  // Responsive sizing:
+  maxWidth: "400px",
+  width: "90%", // On mobile this takes 90%
+  maxHeight: "85vh", // Prevents taking full vertical height
   overflowY: "auto",
   padding: "20px",
   borderRadius: 20,
-  background: "rgba(20, 20, 25, 0.75)",
+  background: "rgba(20, 20, 25, 0.85)", // Slightly darker for better readability
   backdropFilter: "blur(12px)",
   border: "1px solid rgba(255, 255, 255, 0.12)",
   boxShadow: "0 8px 32px 0 rgba(0, 0, 0, 0.37)",
   color: "#eee",
   fontFamily: "'Inter', system-ui, sans-serif",
   zIndex: 10,
+  // Hide scrollbar but keep functionality
+  scrollbarWidth: "none",
+  msOverflowStyle: "none",
 };
 
 const titleStyle = {
-  fontSize: 24,
+  fontSize: 20, // Slightly smaller
   fontWeight: 800,
   marginBottom: 12,
   background: "linear-gradient(90deg, #00c6ff, #0072ff)",
@@ -860,21 +940,22 @@ const applauseBtnStyle = {
   fontSize: 14,
 };
 
-// Camera Controls
 const controlsContainerStyle = {
   position: "fixed",
-  bottom: 30,
-  right: 30,
+  bottom: 20,
+  right: 20,
   background: "rgba(0,0,0,0.7)",
   backdropFilter: "blur(10px)",
-  padding: 14,
+  padding: 10,
   borderRadius: 16,
   border: "1px solid rgba(255,255,255,0.15)",
   display: "flex",
   flexDirection: "column",
   alignItems: "center",
   zIndex: 10,
-  boxShadow: "0 8px 32px rgba(0,0,0,0.5)"
+  boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+  transform: "scale(0.9)", // slightly smaller on mobile
+  transformOrigin: "bottom right",
 };
 
 const ctrlBtn = {
@@ -889,7 +970,7 @@ const ctrlBtn = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  transition: "background 0.2s"
+  transition: "background 0.2s",
 };
 
 const ctrlBtnSmall = {
