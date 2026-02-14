@@ -13,6 +13,10 @@ export default function App() {
   const APPLAUSE_URL = "/applouse/vvqne-applause-383901.mp3";
   const musicUrl = (file) => `/sounds/${file}`;
 
+  // ---------- Loading State (NEW) ----------
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadProgress, setLoadProgress] = useState(0);
+
   // ---------- Transform UI state ----------
   const [stageT, setStageT] = useState({ x: 0, y: -1.2, z: 0, s: 0.079, r: -1.6 });
   const [charT, setCharT] = useState({ x: 0, y: 0, z: 0, s: 1.0 });
@@ -22,7 +26,7 @@ export default function App() {
   const [clipNames, setClipNames] = useState([]);
   const [selectedClip, setSelectedClip] = useState("");
   const selectedClipRef = useRef(""); 
-  const [animStatus, setAnimStatus] = useState("Loading...");
+  const [animStatus, setAnimStatus] = useState("Initializing...");
 
   // ---------- Applause UI state ----------
   const [isApplauding, setIsApplauding] = useState(false);
@@ -161,11 +165,8 @@ export default function App() {
       });
   };
 
-  // --- MAPPING LOGIC ---
   const mapAnimationToMusic = (clipName) => {
     const n = clipName.toLowerCase();
-
-    // Mapping based on your screenshot/file names
     if (n.includes("running")) return "nastelbom-action-440170.mp3";
     if (n.includes("walking") || n.includes("confident_walk")) return "fassounds-lofi-study-calm-peaceful-chill-hop-112191.mp3";
     if (n.includes("hip_hop")) return "alexgrohl-sad-soul-sad-hip-hop-chasing-a-feeling-185750.mp3";
@@ -176,7 +177,6 @@ export default function App() {
     if (n.includes("funny") || n.includes("bubble") || n.includes("boom")) return "music-for-videos-cheerful-electro-swing-152580.mp3";
     if (n.includes("pop") || n.includes("denim") || n.includes("crystal") || n.includes("arm_circle"))
       return "nastelbom-fashion-house-321608.mp3";
-
     return selectedMusic || musicNames[0];
   };
 
@@ -184,25 +184,17 @@ export default function App() {
     const mixer = mixerRef.current;
     const actions = actionsRef.current;
     
-    // Debug checks
-    if (!mixer) {
-        console.warn("Mixer not ready");
-        return;
-    }
-    if (!actions || !actions.has(name)) {
-        console.warn("Animation action not found:", name);
+    if (!mixer || !actions || !actions.has(name)) {
+        console.warn("Cannot play:", name);
         return;
     }
 
     const next = actions.get(name);
-
     if (currentActionRef.current && currentActionRef.current !== next) {
       currentActionRef.current.fadeOut(fade);
     }
     
-    // Force reset and play
     next.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(fade).play();
-    
     currentActionRef.current = next;
     
     setSelectedClip(name);
@@ -210,8 +202,6 @@ export default function App() {
 
     const mapped = mapAnimationToMusic(name);
     if (mapped) crossfadeTo(mapped);
-    
-    console.log("Playing:", name);
   };
 
   const stopAnim = () => {
@@ -219,19 +209,17 @@ export default function App() {
     if (!mixer) return;
     mixer.stopAllAction();
     currentActionRef.current = null;
-    
     if (audioARef.current) audioARef.current.pause();
     if (audioBRef.current) audioBRef.current.pause();
     setMusicStatus("Music paused");
   };
 
-  // --- APPLAUSE TRIGGER ---
   const triggerApplause = () => {
     initAudioSystem();
     if (isApplauding) return; 
 
     setIsApplauding(true);
-    stopAnim(); // Stop movement & Music
+    stopAnim(); 
 
     if (applauseAudioRef.current) {
       applauseAudioRef.current.currentTime = 0;
@@ -262,7 +250,6 @@ export default function App() {
     }, 6000);
   };
 
-  // --- CAMERA CONTROLS ---
   const moveCamera = (x, y, z) => {
     if (!cameraRef.current || !controlsRef.current) return;
     const cam = cameraRef.current;
@@ -271,11 +258,9 @@ export default function App() {
     cam.position.x += x;
     cam.position.y += y;
     cam.position.z += z;
-    
     controls.target.x += x;
     controls.target.y += y;
     controls.target.z += z;
-    
     controls.update();
   };
 
@@ -283,11 +268,9 @@ export default function App() {
     if (!cameraRef.current || !controlsRef.current) return;
     const cam = cameraRef.current;
     const target = controlsRef.current.target;
-
     const direction = new THREE.Vector3().subVectors(cam.position, target);
     const dist = direction.length();
     
-    // Safety clamp
     let newDist = dist + amount;
     if (newDist < 2) newDist = 2;
     if (newDist > 12) newDist = 12;
@@ -306,7 +289,7 @@ export default function App() {
     console.log(`[${label}] bbox center:`, center, "size:", size);
   };
 
-  // ---------- Three init ----------
+  // ---------- LOAD LOGIC (PARALLEL) ----------
   useEffect(() => {
     const mount = mountRef.current;
 
@@ -337,64 +320,92 @@ export default function App() {
     const grid = new THREE.GridHelper(50, 50, 0x444444, 0x222222);
     scene.add(grid);
 
-    const loader = new GLTFLoader();
+    // --- PARALLEL LOADING MANAGER ---
+    const manager = new THREE.LoadingManager();
+    manager.onProgress = (url, itemsLoaded, itemsTotal) => {
+        const p = (itemsLoaded / itemsTotal) * 100;
+        setLoadProgress(Math.round(p));
+    };
 
-    // Stage
-    setAnimStatus("Loading stage...");
-    loader.load(STAGE_URL, (gltf) => {
-        const stage = gltf.scene;
-        stageRef.current = stage;
-        scene.add(stage);
-        stage.position.set(stageT.x, stageT.y, stageT.z);
-        stage.scale.setScalar(stageT.s);
-        stage.rotation.y = stageT.r;
-      }, undefined, (err) => console.error("Stage error", err)
-    );
+    const loader = new GLTFLoader(manager);
 
-    // Character
-    setAnimStatus("Loading character...");
-    loader.load(CHAR_URL, (gltf) => {
-        const player = gltf.scene;
-        playerRef.current = player;
-        scene.add(player);
-        player.position.set(charT.x, charT.y, charT.z);
-        player.scale.setScalar(charT.s);
+    // Helper to load as promise
+    const loadGltf = (url) => {
+        return new Promise((resolve, reject) => {
+            loader.load(url, resolve, undefined, reject);
+        });
+    };
 
-        const mixer = new THREE.AnimationMixer(player);
-        mixerRef.current = mixer;
-        const baseClips = [...(gltf.animations ?? [])];
+    const loadAllAssets = async () => {
+        try {
+            setAnimStatus("Downloading assets...");
+            // Load all 3 files in parallel! Much faster.
+            const [stageGltf, charGltf, animGltf] = await Promise.all([
+                loadGltf(STAGE_URL),
+                loadGltf(CHAR_URL),
+                loadGltf(ANIM_URL)
+            ]);
 
-        setAnimStatus("Loading animations...");
-        loader.load(ANIM_URL, (animGltf) => {
-            const clips = [...baseClips, ...(animGltf.animations ?? [])];
-            if (!clips.length) {
-              setAnimStatus("No animation clips found ❌");
-              return;
+            // 1. Setup Stage
+            const stage = stageGltf.scene;
+            stageRef.current = stage;
+            scene.add(stage);
+            // Apply Initial Transform (used ref values to be safe)
+            stage.position.set(stageT.x, stageT.y, stageT.z);
+            stage.scale.setScalar(stageT.s);
+            stage.rotation.y = stageT.r;
+
+            // 2. Setup Character
+            const player = charGltf.scene;
+            playerRef.current = player;
+            scene.add(player);
+            player.position.set(charT.x, charT.y, charT.z);
+            player.scale.setScalar(charT.s);
+
+            // 3. Setup Animations
+            const mixer = new THREE.AnimationMixer(player);
+            mixerRef.current = mixer;
+
+            // Combine animations from character file (if any) and animation file
+            const baseClips = charGltf.animations || [];
+            const extraClips = animGltf.animations || [];
+            const allClips = [...baseClips, ...extraClips];
+
+            if (allClips.length === 0) {
+                setAnimStatus("No animations found ⚠️");
+            } else {
+                const map = new Map();
+                allClips.forEach((c) => {
+                    if (c.name) map.set(c.name, mixer.clipAction(c));
+                });
+                actionsRef.current = map;
+                
+                const names = Array.from(map.keys());
+                setClipNames(names);
+                setAnimStatus(""); // Clear loading text
+
+                // Auto-Play
+                const preferred =
+                  names.find((x) => x.toLowerCase().includes("walking")) ||
+                  names.find((x) => x.toLowerCase().includes("all_night")) ||
+                  names[0];
+                
+                if (preferred) {
+                    // Slight delay to ensure React state updates don't block render
+                    setTimeout(() => playClip(preferred, 0), 100);
+                }
             }
-            const map = new Map();
-            clips.forEach((c) => {
-                // Ensure name is safe
-                if(c.name) map.set(c.name, mixer.clipAction(c));
-            });
-            actionsRef.current = map;
-            
-            const names = Array.from(map.keys());
-            setClipNames(names);
-            setAnimStatus(""); 
 
-            // Auto-play the first likely good animation
-            const preferred =
-              names.find((x) => x.toLowerCase().includes("walking")) ||
-              names.find((x) => x.toLowerCase().includes("all_night")) ||
-              names[0];
-            
-            if (preferred) playClip(preferred, 0);
-            
-          }, undefined, (err) => setAnimStatus("Failed to load animations")
-        );
-        controls.target.set(0, 1, 0);
-      }, undefined, (err) => setAnimStatus("Failed to load character")
-    );
+            setIsLoading(false); // Hide loading screen
+            controls.target.set(0, 1, 0);
+
+        } catch (err) {
+            console.error("Load Error:", err);
+            setAnimStatus("Error loading assets. Check console.");
+        }
+    };
+
+    loadAllAssets();
 
     const onResize = () => {
       camera.aspect = mount.clientWidth / mount.clientHeight;
@@ -406,13 +417,11 @@ export default function App() {
     const clock = new THREE.Clock();
     let raf = 0;
     
-    // Animation Loop
     const tick = () => {
       raf = requestAnimationFrame(tick);
-      
       const delta = clock.getDelta();
-      // Cap delta to prevent huge jumps if tab is backgrounded
-      const safeDelta = Math.min(delta, 0.1); 
+      // Cap delta for stability
+      const safeDelta = Math.min(delta, 0.1);
 
       if (mixerRef.current) {
           mixerRef.current.update(safeDelta);
@@ -432,8 +441,7 @@ export default function App() {
         mount.removeChild(renderer.domElement);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, []); // Run once
 
   // Live Transforms
   useEffect(() => {
@@ -481,6 +489,23 @@ export default function App() {
   return (
     <div style={{ width: "100vw", height: "100vh", overflow: "hidden", position: "relative" }}>
       
+      {/* --- LOADING SCREEN (NEW) --- */}
+      {isLoading && (
+        <div style={{
+          position: "absolute", zIndex: 9999, top: 0, left: 0, width: "100%", height: "100%",
+          background: "#0f1115", display: "flex", flexDirection: "column",
+          alignItems: "center", justifyContent: "center", color: "#fff"
+        }}>
+           <div style={{ fontSize: 24, fontWeight: "bold", marginBottom: 20 }}>
+             Loading Assets...
+           </div>
+           <div style={{ width: 300, height: 6, background: "#333", borderRadius: 3, overflow: "hidden" }}>
+              <div style={{ width: `${loadProgress}%`, height: "100%", background: "#00c6ff", transition: "width 0.2s" }} />
+           </div>
+           <div style={{ marginTop: 10, fontSize: 14, opacity: 0.7 }}>{loadProgress}%</div>
+        </div>
+      )}
+
       {/* FLOATING ICONS OVERLAY */}
       <div style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 5, overflow: "hidden" }}>
         {particles.map(p => (
@@ -519,7 +544,7 @@ export default function App() {
         <div style={titleStyle}>Niguli on the stage</div>
 
         <div style={sectionTitle}>Animations</div>
-        {animStatus && <div style={smallText}>{animStatus}</div>}
+        {!isLoading && animStatus && <div style={smallText}>{animStatus}</div>}
 
         <div style={{ display: "flex", gap: 8, margin: "10px 0" }}>
           <button style={btn} onClick={() => selectedClip && playClip(selectedClip)} disabled={isApplauding}>
@@ -629,15 +654,12 @@ export default function App() {
 
         <div style={{ fontSize: 10, color: '#aaa', marginBottom: 6, fontWeight: 700 }}>MOVE</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 30px)', gap: 4 }}>
-          {/* Top Row */}
           <div />
           <button style={ctrlBtnSmall} onClick={() => moveCamera(0, 0.5, 0)}>▲</button>
           <div />
-          {/* Middle Row */}
           <button style={ctrlBtnSmall} onClick={() => moveCamera(-0.5, 0, 0)}>◀</button>
           <div />
           <button style={ctrlBtnSmall} onClick={() => moveCamera(0.5, 0, 0)}>▶</button>
-          {/* Bottom Row */}
           <div />
           <button style={ctrlBtnSmall} onClick={() => moveCamera(0, -0.5, 0)}>▼</button>
           <div />
